@@ -4,175 +4,117 @@ import { useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 import * as XLSX from "xlsx";
-import type { Task, TaskStatus } from "../lib/types";
+import type { Task, TaskPriority, TaskStatus } from "../lib/types";
 
 type ChangeLog = { at: string; message: string };
-
 const statuses: TaskStatus[] = ["todo", "doing", "done"];
 
-const aiCorrectDescription = async (text: string) => {
-  const response = await fetch("/api/ai-correct", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-
-  if (!response.ok) throw new Error("Failed to correct description");
-  const data = (await response.json()) as { corrected: string };
-  return data.corrected;
-};
+const icons = { image: "🖼️", pdf: "📄", excel: "📊", txt: "📝", md: "📘", log: "🧾", ai: "✨", github: "🐙" };
 
 export default function HomePage() {
   const boardRef = useRef<HTMLDivElement>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [logs, setLogs] = useState<ChangeLog[]>([]);
+  const [dragId, setDragId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<TaskStatus>("todo");
-  const [loadingAI, setLoadingAI] = useState(false);
+  const [priority, setPriority] = useState<TaskPriority>("medium");
+  const [repo, setRepo] = useState("");
+  const [token, setToken] = useState("");
 
-  const grouped = useMemo(
-    () => Object.fromEntries(statuses.map((s) => [s, tasks.filter((t) => t.status === s)])),
-    [tasks],
-  ) as Record<TaskStatus, Task[]>;
+  const grouped = useMemo(() => Object.fromEntries(statuses.map((s) => [s, tasks.filter((t) => t.status === s)])), [tasks]) as Record<TaskStatus, Task[]>;
+  const addLog = (message: string) => setLogs((p) => [{ at: new Date().toISOString(), message }, ...p]);
 
-  const addLog = (message: string) => setLogs((prev) => [{ at: new Date().toISOString(), message }, ...prev]);
-
-  const addTask = () => {
-    if (!title.trim()) return;
+  const addTask = (incoming?: Partial<Task>) => {
+    if (!incoming?.title && !title.trim()) return;
     const now = new Date().toISOString();
-    const task: Task = { id: crypto.randomUUID(), title: title.trim(), description: description.trim(), status, createdAt: now, updatedAt: now };
+    const task: Task = {
+      id: crypto.randomUUID(),
+      title: incoming?.title?.trim() || title.trim(),
+      description: incoming?.description?.trim() || description.trim(),
+      status: incoming?.status || status,
+      priority: incoming?.priority || priority,
+      source: incoming?.source || "manual",
+      createdAt: now,
+      updatedAt: now,
+    };
     setTasks((prev) => [...prev, task]);
-    addLog(`Task created: ${task.title}`);
-    setTitle("");
-    setDescription("");
-    setStatus("todo");
+    addLog(`Created: ${task.title}`);
+    setTitle(""); setDescription("");
   };
 
-  const moveTask = (id: string, nextStatus: TaskStatus) => {
-    setTasks((prev) =>
-      prev.map((task) => (task.id === id ? { ...task, status: nextStatus, updatedAt: new Date().toISOString() } : task)),
-    );
-    const task = tasks.find((t) => t.id === id);
-    if (task) addLog(`Task moved: ${task.title} -> ${nextStatus}`);
-  };
+  const moveTask = (id: string, nextStatus: TaskStatus) => setTasks((prev) => prev.map((t) => t.id === id ? { ...t, status: nextStatus, updatedAt: new Date().toISOString() } : t));
 
-  const exportImage = async () => {
+  const exportBoard = async (type: "image" | "pdf") => {
     if (!boardRef.current) return;
-    const canvas = await html2canvas(boardRef.current, { backgroundColor: "#f4f7fb", scale: 2 });
-    const url = canvas.toDataURL("image/png");
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "kanban-board.png";
-    a.click();
-  };
-
-  const exportPDF = async () => {
-    if (!boardRef.current) return;
-    const canvas = await html2canvas(boardRef.current, { scale: 2 });
-    const img = canvas.toDataURL("image/png");
+    const canvas = await html2canvas(boardRef.current, { backgroundColor: "#0b1220", scale: 2 });
+    if (type === "image") {
+      const a = document.createElement("a"); a.href = canvas.toDataURL("image/png"); a.download = "kanban-board.png"; a.click(); return;
+    }
     const pdf = new jsPDF("landscape", "pt", "a4");
     const width = pdf.internal.pageSize.getWidth();
     const height = (canvas.height * width) / canvas.width;
-    pdf.addImage(img, "PNG", 0, 20, width, height);
+    pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 10, width, height);
     pdf.save("kanban-board.pdf");
   };
 
-  const exportExcel = () => {
-    const worksheet = XLSX.utils.json_to_sheet(tasks);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Tasks");
-    XLSX.writeFile(workbook, "kanban-tasks.xlsx");
-  };
-
-  const exportTextLike = (format: "txt" | "md") => {
-    const lines = tasks.map((t) => `${format === "md" ? "-" : "*"} [${t.status}] ${t.title}: ${t.description}`);
-    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `kanban-tasks.${format}`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const exportChangelog = () => {
-    const text = logs.map((l) => `${l.at} - ${l.message}`).join("\n");
+  const exportText = (format: "txt" | "md" | "log") => {
+    const text = format === "log"
+      ? logs.map((l) => `${l.at}: ${l.message}`).join("\n")
+      : tasks.map((t) => `${format === "md" ? "-" : "*"} [${t.status}|${t.priority}] ${t.title} - ${t.description}`).join("\n");
     const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = "changelog.txt";
-    a.click();
-    URL.revokeObjectURL(url);
+    a.href = URL.createObjectURL(blob); a.download = `kanban.${format === "log" ? "changelog.txt" : format}`; a.click();
   };
 
-  const correctDescription = async () => {
-    if (!description.trim()) return;
-    setLoadingAI(true);
-    try {
-      const corrected = await aiCorrectDescription(description);
-      setDescription(corrected);
-      addLog("AI corrected draft description");
-    } finally {
-      setLoadingAI(false);
-    }
+  const exportExcel = () => { const ws = XLSX.utils.json_to_sheet(tasks); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Tasks"); XLSX.writeFile(wb, "kanban.xlsx"); };
+
+  const aiCorrectDescription = async () => {
+    const r = await fetch("/api/ai-correct", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: description }) });
+    const d = (await r.json()) as { corrected: string }; setDescription(d.corrected); addLog("AI corrected description");
   };
 
-  return (
-    <main className="main">
-      <section className="header">
-        <div>
-          <h1>KanbanFan</h1>
-          <small>Manage tasks + AI correction + multi-format export.</small>
-        </div>
-      </section>
+  const importFromGithub = async () => {
+    const r = await fetch("/api/github-scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo, token }) });
+    const d = (await r.json()) as { cards?: Array<Partial<Task>>; error?: string };
+    if (d.error || !d.cards) return addLog(`GitHub import failed: ${d.error || "unknown"}`);
+    d.cards.forEach((c) => addTask({ ...c, source: "github" }));
+    addLog(`Imported ${d.cards.length} items from GitHub: ${repo}`);
+  };
 
-      <section className="col">
-        <h3>Create Task</h3>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" />
-        <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Task description" rows={3} />
-        <div className="row">
-          <button type="button" className="secondary" onClick={correctDescription} disabled={loadingAI}>
-            {loadingAI ? "Correcting..." : "AI Correct Description"}
-          </button>
-          <select value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)}>
-            {statuses.map((s) => (
-              <option key={s} value={s}>{s.toUpperCase()}</option>
-            ))}
-          </select>
-        </div>
-        <button type="button" onClick={addTask}>Add Task</button>
-      </section>
+  return <main className="main">
+    <header className="topbar"><h1>KanbanFan Pro</h1><p>Mobile-first board for daily developer execution.</p></header>
 
-      <section className="toolbar">
-        <button onClick={exportImage}>Export Image</button>
-        <button onClick={exportPDF}>Export PDF</button>
-        <button onClick={exportExcel}>Export Excel</button>
-        <button onClick={() => exportTextLike("txt")}>Export Text</button>
-        <button onClick={() => exportTextLike("md")}>Export Markdown</button>
-        <button className="secondary" onClick={exportChangelog}>Export Changelog</button>
-      </section>
+    <section className="panel">
+      <h3>Create task</h3>
+      <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" />
+      <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe scope, files, acceptance..." rows={4} />
+      <div className="row">
+        <select value={status} onChange={(e) => setStatus(e.target.value as TaskStatus)}>{statuses.map((s) => <option key={s}>{s}</option>)}</select>
+        <select value={priority} onChange={(e) => setPriority(e.target.value as TaskPriority)}><option>low</option><option>medium</option><option>high</option></select>
+      </div>
+      <div className="row"><button onClick={aiCorrectDescription}>{icons.ai} AI Correct</button><button onClick={() => addTask()}>{"➕"} Add</button></div>
+    </section>
 
-      <section className="grid" ref={boardRef}>
-        {statuses.map((s) => (
-          <div className="col" key={s}>
-            <h3>{s.toUpperCase()}</h3>
-            {grouped[s].map((task) => (
-              <article className="card" key={task.id}>
-                <b>{task.title}</b>
-                <p>{task.description || "No description"}</p>
-                <small>Updated: {new Date(task.updatedAt).toLocaleString()}</small>
-                <select value={task.status} onChange={(e) => moveTask(task.id, e.target.value as TaskStatus)}>
-                  {statuses.map((next) => (
-                    <option key={next} value={next}>{next.toUpperCase()}</option>
-                  ))}
-                </select>
-              </article>
-            ))}
-          </div>
-        ))}
-      </section>
-    </main>
-  );
+    <section className="panel">
+      <h3>{icons.github} GitHub Sync + AI Issue Seeder</h3>
+      <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/repo" />
+      <input value={token} onChange={(e) => setToken(e.target.value)} placeholder="Optional GitHub token" type="password" />
+      <button onClick={importFromGithub}>Import Issues + TODOs to Kanban</button>
+      <small>This scans open issues and README TODO/FIXME lines and creates cards.</small>
+    </section>
+
+    <section className="exportBar">
+      <button onClick={() => exportBoard("image")}>{icons.image}</button><button onClick={() => exportBoard("pdf")}>{icons.pdf}</button><button onClick={exportExcel}>{icons.excel}</button>
+      <button onClick={() => exportText("txt")}>{icons.txt}</button><button onClick={() => exportText("md")}>{icons.md}</button><button onClick={() => exportText("log")}>{icons.log}</button>
+    </section>
+
+    <section className="board" ref={boardRef}>{statuses.map((s) => <div className="column" key={s} onDragOver={(e) => e.preventDefault()} onDrop={() => dragId && moveTask(dragId, s)}>
+      <h3>{s.toUpperCase()} <span>{grouped[s].length}</span></h3>
+      {grouped[s].map((task) => <article key={task.id} className={`card p-${task.priority}`} draggable onDragStart={() => setDragId(task.id)}>
+        <strong>{task.title}</strong><p>{task.description || "No description"}</p><small>{task.priority} • {task.source || "manual"}</small>
+      </article>)}
+    </div>)}</section>
+  </main>;
 }
