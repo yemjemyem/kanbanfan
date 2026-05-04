@@ -1,0 +1,15 @@
+:root { font-family: Inter, Arial, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #f4f7fb; color: #0f172a; }
+.main { max-width: 1200px; margin: 0 auto; padding: 20px; }
+.header { display: flex; gap: 12px; flex-wrap: wrap; justify-content: space-between; align-items: center; }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 14px; margin-top: 16px; }
+.col { background: #fff; border-radius: 12px; padding: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px; margin-bottom: 10px; background: #fcfdff; }
+input, textarea, select, button { width: 100%; padding: 8px; margin: 4px 0; border-radius: 8px; border: 1px solid #cbd5e1; }
+button { cursor: pointer; border: none; background: #2563eb; color: #fff; font-weight: 600; }
+button.secondary { background: #475569; }
+.toolbar { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 8px; margin: 12px 0; }
+.row { display: flex; gap: 8px; }
+small { color: #475569; }
+@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .toolbar { grid-template-columns: repeat(2, 1fr);} }
